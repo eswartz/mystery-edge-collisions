@@ -1,0 +1,29 @@
+[package]
+name = "avian-edge-bug"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.18.1", default-features = false, features = ["default_app", "default_platform", "common_api", "scene", "2d", "3d"] }
+
+log = { version = "0.4", features = [
+    "max_level_debug",
+] }
+tracing = { version = "0.1", features = [
+    "max_level_debug",
+] }
+avian3d = { git = "https://github.com/Jondolf/avian.git", branch = "main", default-features = false, features = [
+	"3d",
+	"collider-from-mesh",
+    "f32", "parry-f32",
+    #  "f64", "parry-f64",
+    "bevy_scene",
+    "bevy_picking",
+    "diagnostic_ui",
+    "debug-plugin",
+    # "validate",  # has crash
+    "xpbd_joints", # optional
+    "serialize",
+] }
+
+bevy_skein = { version = "0.5.0" }

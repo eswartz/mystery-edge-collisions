@@ -1,0 +1,424 @@
+use std::ops::Index;
+use std::time::Duration;
+
+use avian3d::math::Vector;
+use avian3d::prelude::*;
+use bevy::asset::AssetLoadFailedEvent;
+use bevy::log::LogPlugin;
+use bevy::{color::palettes::css::*, prelude::*};
+use bevy::scene::SceneInstanceReady;
+use bevy_skein::SkeinPlugin;
+
+#[derive(States, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[reflect(State, Default)]
+#[type_path = "game"]
+pub enum ProgramState {
+    #[default]
+    Initializing,
+    Setup,
+    InGame,
+    Teardown,
+}
+
+/// Root of 3D content.
+#[derive(Component)]
+struct WorldMarker;
+
+/// Root of UI content.
+#[derive(Component)]
+struct UiMarker;
+
+
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum CollisionSceneSelection {
+    #[default]
+    Scene0,
+    Scene0b,
+    Scene1,
+    Scene2,
+    Scene3,
+    Scene4,
+    Scene5,
+    Scene6,
+    Scene7,
+}
+
+impl Index<usize> for CollisionSceneSelection {
+    type Output = Self;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &Self::PLAYLIST[index]
+    }
+}
+impl CollisionSceneSelection {
+    pub(crate) const LEN: usize = 9;
+    pub(crate) const PLAYLIST : [Self; Self::LEN] = [
+        Self::Scene0,
+        Self::Scene0b,
+        Self::Scene1,
+        Self::Scene2,
+        Self::Scene3,
+        Self::Scene4,
+        Self::Scene5,
+        Self::Scene6,
+        Self::Scene7,
+
+    ];
+    pub(crate) fn position(&self) -> usize {
+        // This is dumb
+        Self::PLAYLIST.iter().position(|other| self == other).expect("empty list")
+    }
+    pub(crate) fn next(&self) -> Self {
+        let pos = self.position();
+        Self::PLAYLIST.get((pos + 1) % Self::LEN).cloned().expect("empty list")
+    }
+    pub(crate) fn prev(&self) -> Self {
+        let pos = self.position();
+        Self::PLAYLIST.get((pos + Self::LEN - 1) % Self::LEN).cloned().expect("empty list")
+    }
+
+    pub(crate) fn get_asset_path(&self) -> &str {
+        match self {
+            Self::Scene0 => "maps/level_0.glb#Scene0",
+            Self::Scene0b => "maps/level_0_reduced.glb#Scene0",
+            Self::Scene1 => "maps/level_0_broken.glb#Scene0",
+            Self::Scene2 => "maps/level_0_edit_0.glb#Scene0",
+            Self::Scene3 => "maps/level_0_edit_1.glb#Scene0",
+            Self::Scene4 => "maps/level_0_edit_2.glb#Scene0",
+            Self::Scene5 => "maps/level_0_edit_3.glb#Scene0",
+            Self::Scene6 => "maps/level_0_edit_fixed.glb#Scene0",
+            Self::Scene7 => "maps/level_0_edit_fixed_2.glb#Scene0",
+        }
+    }
+
+}
+
+/// Add to prompt moving the projectiles to their base location.
+#[derive(Resource, Debug, Default)]
+struct ResetProjectiles;
+
+/// Add to prompt firing the projectiles with the given power.
+#[derive(Resource, Debug, Default)]
+struct FireProjectiles(f32);
+
+
+// set from skein
+#[derive(Component, Default, Reflect)]
+#[reflect(Component, Default)]
+pub struct ContentMarker;
+
+
+#[derive(Component)]
+struct Projectile {
+    start: Vec3,
+    vel: Vector,
+}
+
+
+fn main() -> AppExit {
+    let mut app = App::new();
+    app
+        .add_plugins((
+            DefaultPlugins
+                .set(LogPlugin {
+                    filter: "info,wgpu_hal=off,avian3d=debug".to_string(),
+                    level: tracing::Level::INFO,
+                    ..default()
+                }),
+            SkeinPlugin::default(),
+            PhysicsPlugins::default(),
+        ))
+        .add_plugins(avian3d::debug_render::PhysicsDebugPlugin::default())
+
+        .insert_gizmo_config(
+             PhysicsGizmos {
+                collider_color: Some(ORANGE.with_alpha(0.25).into()),
+                 aabb_color: Some(Color::WHITE.with_alpha(0.25).into()),
+                 sleeping_color_multiplier: Some([0.1, 0.1, 0.1, 1.0]),
+                 ..default()
+             },
+            GizmoConfig {
+                enabled: true,
+                depth_bias: -0.1,
+                ..default()
+            },
+        )
+    ;
+
+    app
+        .insert_state(ProgramState::default())
+        .init_resource::<CollisionSceneSelection>()
+        .add_systems(
+            Startup,
+            setup
+        )
+        .add_systems(
+            OnEnter(ProgramState::Setup),
+            (make_world, make_ui)
+        )
+        .add_systems(Update,
+            handle_load_failed
+        )
+        .add_systems(
+            OnEnter(ProgramState::InGame),
+            queue_fire_projectiles
+        )
+        .add_systems(
+            OnEnter(ProgramState::Teardown),
+            (remove_world, remove_ui, restart).chain()
+        )
+        .add_systems(
+            FixedUpdate,
+            (
+                handle_keys.run_if(in_state(ProgramState::InGame)),
+                reset_projectiles.run_if(resource_exists::<ResetProjectiles>),
+                fire_projectiles.run_if(resource_exists::<FireProjectiles>),
+            )
+        )
+    ;
+
+    app.run()
+}
+
+fn handle_load_failed(reader: MessageReader<AssetLoadFailedEvent<Scene>>, mut commands: Commands) {
+    if reader.is_empty() {
+        return
+    }
+    commands.set_state(ProgramState::InGame);
+}
+
+fn setup(
+    mut commands: Commands,
+    world_q: Query<Entity, With<WorldMarker>>,
+) {
+    for world in world_q.iter() {
+        commands.entity(world).despawn();
+    }
+
+    commands.set_state(ProgramState::Setup);
+}
+
+fn make_world(
+    mut commands: Commands,
+    model: Res<CollisionSceneSelection>,
+    assets: Res<AssetServer>,
+) {
+    let scene_path = model.get_asset_path().to_owned() ;
+    commands.spawn((
+        DespawnOnExit(ProgramState::InGame),
+        WorldMarker,
+        Visibility::Inherited,
+        Transform::IDENTITY,
+        AmbientLight{
+            brightness: 2000.0,
+            ..default()
+        }
+    ))
+    .with_children(|commands| {
+        commands
+            .spawn(SceneRoot(assets.load::<Scene>(scene_path)))
+            .observe(set_up_scene);
+    })
+    ;
+}
+
+/// glTF scene is instantiated: spawn projectiles.
+fn set_up_scene(
+    _event: On<SceneInstanceReady>,
+    world_q: Single<Entity, With<WorldMarker>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
+) {
+    // let size = Vec3::new(2.0, 0.5, 0.5);
+    let size = Vec3::new(1.0, 0.5, 0.5);
+    let mesh = meshes.add(Cuboid::new(size.x, size.y, size.z));
+    let mat = mats.add(Color::WHITE);
+
+    const X1: f32 = 3.0;
+    const Z1: f32 = 10.0;
+    const SX: f32 = 5.0;
+    const SZ: f32 = 7.5;
+
+    for (pos, vel) in [
+        (Vec3::new(-X1, 1.0, -Z1), Vector::new(-SX, -1.0, SZ)),
+        (Vec3::new(X1, 1.0, -Z1), Vector::new(SX, -1.0, SZ)),
+        (Vec3::new(-X1, 1.0, Z1), Vector::new(-SX, -1.0, -SZ)),
+        (Vec3::new(X1, 1.0, Z1), Vector::new(SX, -1.0, -SZ)),
+        (Vec3::new(5.0, 1.0, 0.0), Vector::new(-SX, -1.0, 0.0)),
+    ] {
+        commands.spawn((
+            ChildOf(*world_q),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(mat.clone()),
+            Collider::cuboid(size.x, size.y, size.z),
+            RigidBody::Dynamic,
+            Mass(1000.0),
+            Transform::from_translation(pos),
+            Friction::ZERO,
+
+            Projectile{
+                start: pos,
+                vel,
+            },
+        ));
+    }
+
+    commands.set_state(ProgramState::InGame);
+}
+
+fn make_ui(mut commands: Commands<'_, '_>,
+    model: Res<CollisionSceneSelection>,
+) {
+    let scene_path = dbg!(model.get_asset_path().to_owned());
+    commands.spawn((
+        UiMarker,
+        Camera2d::default(),
+        Camera {
+            order: 1,
+            ..default()
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(12),
+            left: px(12),
+            ..default()
+        },
+        Text::new(
+            format!(r#"
+Scene: {scene_path}
+Space/Right/Left: toggle scenes
+Enter: fire projectiles (hold time => velocity)
+'['/']': rotate geometry
+G: toggle physics gizmos
+            "#,
+        ), ),
+        TextFont {
+            font_size: 12.0,
+            .. default()
+        },
+        TextColor(Color::WHITE.with_alpha(0.5)),
+    ));
+}
+
+fn remove_world(
+    mut commands: Commands,
+    world_q: Query<Entity, With<WorldMarker>>,
+    camera_q: Query<Entity, With<Camera>>,
+) {
+    world_q.iter().for_each(|ent| commands.entity(ent).try_despawn());
+    camera_q.iter().for_each(|ent| commands.entity(ent).try_despawn());
+}
+
+fn remove_ui(
+    mut commands: Commands,
+    ui_q: Query<Entity, With<UiMarker>>,
+) {
+    ui_q.iter().for_each(|ent| commands.entity(ent).try_despawn());
+}
+
+
+fn restart(
+    mut commands: Commands,
+) {
+    commands.set_state(ProgramState::Setup);
+}
+
+fn handle_keys(
+    keyboard_input: ResMut<ButtonInput<KeyCode>>,
+    mut content_q: Query<&mut Transform, With<ContentMarker>>,
+    mut gizmos: ResMut<GizmoConfigStore>,
+    mut selection: ResMut<CollisionSceneSelection>,
+    mut commands: Commands,
+    time: Res<Time>,
+    mut fire_time: Local<Timer>,
+    mut switch_time: Local<Timer>,
+) {
+    if keyboard_input.just_pressed(KeyCode::Enter) {
+        // Fire every N seconds...
+        commands.insert_resource(ResetProjectiles);
+        let timer = Timer::from_seconds(3.0, TimerMode::Repeating);
+        *fire_time = timer;
+    }
+    // and monitor ongoing press to adjust firing power.
+    if keyboard_input.pressed(KeyCode::Enter) {
+        if fire_time.tick(time.delta()).just_finished() {
+            submit_fire_projectiles(commands.reborrow(), fire_time.elapsed());
+        }
+    }
+    if keyboard_input.just_released(KeyCode::Enter) {
+        submit_fire_projectiles(commands.reborrow(), fire_time.elapsed());
+    }
+
+    // Turn the world and collider on the Y axis.
+    if keyboard_input.just_pressed(KeyCode::BracketLeft) {
+        content_q.iter_mut().for_each(|mut xfrm| xfrm.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * xfrm.rotation);
+    }
+    if keyboard_input.just_pressed(KeyCode::BracketRight) {
+        content_q.iter_mut().for_each(|mut xfrm| xfrm.rotation = Quat::from_rotation_y(- std::f32::consts::FRAC_PI_2) * xfrm.rotation);
+    }
+
+    // Toggle physics gizmos.
+    if keyboard_input.just_pressed(KeyCode::KeyG) {
+        gizmos.config_mut::<PhysicsGizmos>().0.enabled ^= true;
+    }
+
+    /// These keys define the bidirectional navigation, from "move back" at position 0
+    /// and all others considered "move forward".
+    const NAV_KEYS: [KeyCode; 3] = [KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::Space];
+
+    if keyboard_input.any_just_pressed(NAV_KEYS) {
+        let timer = Timer::from_seconds(1.0 / 30.0, TimerMode::Once);
+        *switch_time = timer;
+    }
+    else if keyboard_input.any_pressed(NAV_KEYS) {
+        if switch_time.tick(time.delta()).just_finished() {
+            let is_prev = keyboard_input.pressed(NAV_KEYS[0]);
+            *selection = if is_prev {
+                selection.prev()
+            } else {
+                selection.next()
+            };
+            log::info!("Switching scene to {selection:?}...");
+            commands.set_state(ProgramState::Teardown);
+        }
+    } else if keyboard_input.any_just_released(NAV_KEYS) {
+        switch_time.reset();
+    }
+}
+
+fn reset_projectiles(
+    mut projectiles_q: Query<(&Projectile, &mut Transform, Forces), Without<ContentMarker>>,
+    mut commands: Commands,
+) {
+    for (bumper, mut xfrm, mut forces) in projectiles_q.iter_mut() {
+        xfrm.translation = bumper.start;
+        xfrm.rotation = Quat::IDENTITY;
+        *forces.angular_velocity_mut() = default();
+        *forces.linear_velocity_mut() = default();
+    }
+    commands.remove_resource::<ResetProjectiles>();
+}
+
+
+fn queue_fire_projectiles(commands: Commands) {
+    submit_fire_projectiles(commands, Duration::from_secs_f32(0.5));
+}
+
+fn submit_fire_projectiles(mut commands: Commands, duration: Duration) {
+    let power = duration.as_secs_f32().max(1.0 / 15.0) * 2.0;
+    commands.insert_resource(FireProjectiles(power));
+}
+
+fn fire_projectiles(
+    mut projectiles_q: Query<(&Projectile, Forces), Without<ContentMarker>>,
+    mut commands: Commands,
+    fire_projectiles: Res<FireProjectiles>,
+) {
+    let power = fire_projectiles.0;
+    for (bumper, mut forces) in projectiles_q.iter_mut() {
+        *forces.angular_velocity_mut() = default();
+        *forces.linear_velocity_mut() = bumper.vel * power;
+    }
+    commands.remove_resource::<FireProjectiles>();
+}
