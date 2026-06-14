@@ -120,14 +120,42 @@ struct Projectile {
     vel: Vector,
 }
 
-#[derive(Resource, Default)]
-struct IncludeAllColliders(bool);
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
+enum IncludeColliders {
+    #[default]
+    OnlyMeshes,
+    All,
+    NonMeshes,
+}
+
+impl IncludeColliders {
+    fn next(self) -> Self {
+        match self {
+            IncludeColliders::OnlyMeshes => IncludeColliders::All,
+            IncludeColliders::All => IncludeColliders::NonMeshes,
+            IncludeColliders::NonMeshes => IncludeColliders::OnlyMeshes,
+        }
+    }
+}
+
+#[derive(Clone, Reflect, GizmoConfigGroup)]
+#[reflect(Clone, Default)]
+struct NormalRenderConfigGroup {
+    pub normal_color: Option<Color>,
+    pub scale: f32,
+}
+
+impl Default for NormalRenderConfigGroup {
+    fn default() -> Self {
+        Self { normal_color: Some(TEAL.with_alpha(0.25).into()), scale: 1.0 }
+    }
+}
 
 fn main() -> AppExit {
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins.set(LogPlugin {
-            filter: "info,wgpu_hal=off,avian3d=debug".to_string(),
+            filter: "info,wgpu_hal=off,avian3d=debug,calloop=off".to_string(),
             level: tracing::Level::INFO,
             ..default()
         }),
@@ -140,6 +168,8 @@ fn main() -> AppExit {
             collider_color: Some(ORANGE.with_alpha(0.25).into()),
             aabb_color: Some(Color::WHITE.with_alpha(0.25).into()),
             sleeping_color_multiplier: Some([0.1, 0.1, 0.1, 1.0]),
+            contact_normal_color: Some(RED.with_alpha(0.5).into()),
+            contact_normal_scale: ContactGizmoScale::Constant(2.0),
             ..default()
         },
         GizmoConfig {
@@ -149,9 +179,11 @@ fn main() -> AppExit {
         },
     );
 
+    app.init_gizmo_group::<NormalRenderConfigGroup>();
+
     app.insert_state(ProgramState::default())
         .init_resource::<CollisionSceneSelection>()
-        .init_resource::<IncludeAllColliders>()
+        .init_resource::<IncludeColliders>()
         .add_systems(Startup, setup)
         .add_systems(OnEnter(ProgramState::Setup), (make_world, make_ui))
         .add_systems(Update, handle_load_failed)
@@ -167,7 +199,15 @@ fn main() -> AppExit {
                 reset_projectiles.run_if(resource_exists::<ResetProjectiles>),
                 fire_projectiles.run_if(resource_exists::<FireProjectiles>),
             ),
-        );
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                draw_collider_mesh_normals
+                .run_if(|store: Res<GizmoConfigStore>| store.config::<NormalRenderConfigGroup>().0.enabled),
+            ),
+        )
+    ;
 
     app.run()
 }
@@ -259,6 +299,7 @@ fn make_ui(mut commands: Commands<'_, '_>, model: Res<CollisionSceneSelection>) 
         UiMarker,
         Camera2d::default(),
         Camera {
+            // on top of 3d
             order: 1,
             ..default()
         },
@@ -292,12 +333,8 @@ Backspace: recreate collider (FIX_INTERNAL_EDGES)
 fn remove_world(
     mut commands: Commands,
     world_q: Query<Entity, With<WorldMarker>>,
-    camera_q: Query<Entity, With<Camera>>,
 ) {
     world_q
-        .iter()
-        .for_each(|ent| commands.entity(ent).try_despawn());
-    camera_q
         .iter()
         .for_each(|ent| commands.entity(ent).try_despawn());
 }
@@ -317,7 +354,7 @@ fn handle_keys(
     mut gizmos: ResMut<GizmoConfigStore>,
     mut selection: ResMut<CollisionSceneSelection>,
     mut commands: Commands,
-    mut include_all: ResMut<IncludeAllColliders>,
+    mut include_colliders: ResMut<IncludeColliders>,
     time: Res<Time>,
     mut fire_time: Local<Timer>,
     mut switch_time: Local<Timer>,
@@ -360,26 +397,23 @@ fn handle_keys(
 
     // Toggle adjusting all colliders.
     if keyboard_input.just_pressed(KeyCode::KeyA) {
-        include_all.0 = !include_all.0;
-        log::info!("{}", if include_all.0 { "Only modifying trimesh colliders" } else { "Regenerating all colliders" });
+        *include_colliders = include_colliders.next();
+        log::info!("Colliders affected: {:?}", *include_colliders);
     }
-
 
     // Recreate mesh with recommended flags.
     if keyboard_input.just_released(KeyCode::Backspace) {
         log::info!("Recreating collider mesh with FIX_INTERNAL_EDGES");
-        commands.run_system_cached((|| {
-            (TrimeshFlags::FIX_INTERNAL_EDGES, false)
+        commands.run_system_cached((|| { (TrimeshFlags::FIX_INTERNAL_EDGES, false)
         }).pipe(recreate_collider_trimesh_faces_with_flags));
     }
     // Flip normals.
     if keyboard_input.just_released(KeyCode::KeyF) {
         log::info!("Recreating collider from flipped face order and using FIX_INTERNAL_EDGES");
-        commands.run_system_cached((|| {
-            (TrimeshFlags::FIX_INTERNAL_EDGES, true)
+        commands.run_system_cached((|| { (TrimeshFlags::FIX_INTERNAL_EDGES, true)
         }).pipe(recreate_collider_trimesh_faces_with_flags));
     }
-    // Recreate with all other bits
+    // Recreate with all other bits (since the default is zero).
     if keyboard_input.just_released(KeyCode::KeyQ) {
         log::info!("Recreating collider using all bits but not FIX_INTERNAL_EDGES");
         commands.run_system_cached((|| {
@@ -393,8 +427,12 @@ fn handle_keys(
     // Recreate mesh with zero flags.
     if keyboard_input.just_released(KeyCode::KeyZ) {
         log::info!("Recreating colliders from their meshes (TrimeshFlags::empty())");
-        commands.run_system_cached((|| {
-            (TrimeshFlags::default(), false)
+        commands.run_system_cached((|| { (TrimeshFlags::empty(), false)
+        }).pipe(recreate_collider_trimesh_faces_with_flags));
+    }
+    if keyboard_input.just_released(KeyCode::KeyR) {
+        log::info!("Recreating colliders from their meshes, faces flipped (TrimeshFlags::empty())");
+        commands.run_system_cached((|| { (TrimeshFlags::empty(), true)
         }).pipe(recreate_collider_trimesh_faces_with_flags));
     }
 
@@ -456,15 +494,54 @@ fn fire_projectiles(
     commands.remove_resource::<FireProjectiles>();
 }
 
-fn recreate_collider_trimesh_faces_with_flags(In((flags, flip)): In<(TrimeshFlags, bool)>, include_all: Res<IncludeAllColliders>, mut collider_q: Query<(&Name, &mut Collider)>, mut _commands: Commands) {
+fn recreate_collider_trimesh_faces_with_flags(In((flags, flip)): In<(TrimeshFlags, bool)>, include_colliders: Res<IncludeColliders>, mut collider_q: Query<(&Name, &mut Collider)>, mut _commands: Commands) {
     for (name, mut collider) in collider_q.iter_mut() {
-        if include_all.0 && !matches!(collider.shape().as_typed_shape(), TypedShape::TriMesh(_)) { continue };
-        log::info!("... adjusting {name}");
+        let is_mesh = matches!(collider.shape().as_typed_shape(), TypedShape::TriMesh(_));
+        let include = match *include_colliders {
+            IncludeColliders::OnlyMeshes => is_mesh,
+            IncludeColliders::All => true,
+            IncludeColliders::NonMeshes => !is_mesh,
+        };
+        if !include {
+            continue
+        }
 
+        log::info!("... adjusting {name}");
         let mut trimesh = collider.trimesh_builder().build().expect("no idempotence?");
         if flip {
             trimesh.indices.reverse();
         }
         *collider = Collider::trimesh_with_config(trimesh.vertices, trimesh.indices, flags);
+
+        let mesh = collider.shape().as_trimesh().expect("wa?");
+        log::info!(".. collider mesh has flags: 0x{:02X} topology:{} pseudo_normals:{}", mesh.flags(),
+            mesh.topology().is_some(),
+            mesh.pseudo_normals_if_oriented().is_some());
+    }
+}
+
+
+fn draw_collider_mesh_normals(
+    query: Query<(
+        &Collider,
+        &GlobalTransform,
+    )>,
+    mut gizmos: Gizmos<NormalRenderConfigGroup>,
+) {
+    if !gizmos.config.enabled { return }
+
+    let scale = gizmos.config_ext.scale;
+    let Some(color) = gizmos.config_ext.normal_color.clone() else { return };
+
+    for (collider, gxfrm) in &query {
+        let Some(mesh) = collider.shape().as_trimesh() else { continue };
+
+        for tri in mesh.triangles() {
+            let center = tri.center();
+            let norm = tri.robust_normal();
+            gizmos.line(gxfrm.transform_point(center),
+                gxfrm.transform_point(center + norm * scale),
+                color);
+        }
     }
 }
