@@ -1,12 +1,14 @@
 use std::ops::Index;
 use std::time::Duration;
+use std::assert_matches;
 
 use avian3d::math::Vector;
+use avian3d::parry::shape::TypedShape;
 use avian3d::prelude::*;
 use bevy::asset::AssetLoadFailedEvent;
 use bevy::log::LogPlugin;
-use bevy::{color::palettes::css::*, prelude::*};
 use bevy::scene::SceneInstanceReady;
+use bevy::{color::palettes::css::*, prelude::*};
 use bevy_skein::SkeinPlugin;
 
 #[derive(States, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -28,8 +30,8 @@ struct WorldMarker;
 #[derive(Component)]
 struct UiMarker;
 
-
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(unused)]
 enum CollisionSceneSelection {
     #[default]
     Scene0,
@@ -51,30 +53,38 @@ impl Index<usize> for CollisionSceneSelection {
     }
 }
 impl CollisionSceneSelection {
-    pub(crate) const LEN: usize = 9;
-    pub(crate) const PLAYLIST : [Self; Self::LEN] = [
+    pub(crate) const LEN: usize = 7;
+    pub(crate) const PLAYLIST: [Self; Self::LEN] = [
         Self::Scene0,
         Self::Scene0b,
         Self::Scene1,
         Self::Scene2,
         Self::Scene3,
         Self::Scene4,
-        Self::Scene5,
+        // Self::Scene5,
         Self::Scene6,
-        Self::Scene7,
-
+        // Self::Scene7,
     ];
     pub(crate) fn position(&self) -> usize {
         // This is dumb
-        Self::PLAYLIST.iter().position(|other| self == other).expect("empty list")
+        Self::PLAYLIST
+            .iter()
+            .position(|other| self == other)
+            .expect("empty list")
     }
     pub(crate) fn next(&self) -> Self {
         let pos = self.position();
-        Self::PLAYLIST.get((pos + 1) % Self::LEN).cloned().expect("empty list")
+        Self::PLAYLIST
+            .get((pos + 1) % Self::LEN)
+            .cloned()
+            .expect("empty list")
     }
     pub(crate) fn prev(&self) -> Self {
         let pos = self.position();
-        Self::PLAYLIST.get((pos + Self::LEN - 1) % Self::LEN).cloned().expect("empty list")
+        Self::PLAYLIST
+            .get((pos + Self::LEN - 1) % Self::LEN)
+            .cloned()
+            .expect("empty list")
     }
 
     pub(crate) fn get_asset_path(&self) -> &str {
@@ -90,7 +100,6 @@ impl CollisionSceneSelection {
             Self::Scene7 => "maps/level_0_edit_fixed_2.glb#Scene0",
         }
     }
-
 }
 
 /// Add to prompt moving the projectiles to their base location.
@@ -101,12 +110,10 @@ struct ResetProjectiles;
 #[derive(Resource, Debug, Default)]
 struct FireProjectiles(f32);
 
-
 // set from skein
 #[derive(Component, Default, Reflect)]
 #[reflect(Component, Default)]
 pub struct ContentMarker;
-
 
 #[derive(Component)]
 struct Projectile {
@@ -114,83 +121,62 @@ struct Projectile {
     vel: Vector,
 }
 
-
 fn main() -> AppExit {
     let mut app = App::new();
-    app
-        .add_plugins((
-            DefaultPlugins
-                .set(LogPlugin {
-                    filter: "info,wgpu_hal=off,avian3d=debug".to_string(),
-                    level: tracing::Level::INFO,
-                    ..default()
-                }),
-            SkeinPlugin::default(),
-            PhysicsPlugins::default(),
-        ))
-        .add_plugins(avian3d::debug_render::PhysicsDebugPlugin::default())
+    app.add_plugins((
+        DefaultPlugins.set(LogPlugin {
+            filter: "info,wgpu_hal=off,avian3d=debug".to_string(),
+            level: tracing::Level::INFO,
+            ..default()
+        }),
+        SkeinPlugin::default(),
+        PhysicsPlugins::default(),
+    ))
+    .add_plugins(avian3d::debug_render::PhysicsDebugPlugin::default())
+    .insert_gizmo_config(
+        PhysicsGizmos {
+            collider_color: Some(ORANGE.with_alpha(0.25).into()),
+            aabb_color: Some(Color::WHITE.with_alpha(0.25).into()),
+            sleeping_color_multiplier: Some([0.1, 0.1, 0.1, 1.0]),
+            ..default()
+        },
+        GizmoConfig {
+            enabled: true,
+            depth_bias: -0.1,
+            ..default()
+        },
+    );
 
-        .insert_gizmo_config(
-             PhysicsGizmos {
-                collider_color: Some(ORANGE.with_alpha(0.25).into()),
-                 aabb_color: Some(Color::WHITE.with_alpha(0.25).into()),
-                 sleeping_color_multiplier: Some([0.1, 0.1, 0.1, 1.0]),
-                 ..default()
-             },
-            GizmoConfig {
-                enabled: true,
-                depth_bias: -0.1,
-                ..default()
-            },
-        )
-    ;
-
-    app
-        .insert_state(ProgramState::default())
+    app.insert_state(ProgramState::default())
         .init_resource::<CollisionSceneSelection>()
-        .add_systems(
-            Startup,
-            setup
-        )
-        .add_systems(
-            OnEnter(ProgramState::Setup),
-            (make_world, make_ui)
-        )
-        .add_systems(Update,
-            handle_load_failed
-        )
-        .add_systems(
-            OnEnter(ProgramState::InGame),
-            queue_fire_projectiles
-        )
+        .add_systems(Startup, setup)
+        .add_systems(OnEnter(ProgramState::Setup), (make_world, make_ui))
+        .add_systems(Update, handle_load_failed)
+        .add_systems(OnEnter(ProgramState::InGame), queue_fire_projectiles)
         .add_systems(
             OnEnter(ProgramState::Teardown),
-            (remove_world, remove_ui, restart).chain()
+            (remove_world, remove_ui, restart).chain(),
         )
         .add_systems(
-            FixedUpdate,
+            Update,
             (
                 handle_keys.run_if(in_state(ProgramState::InGame)),
                 reset_projectiles.run_if(resource_exists::<ResetProjectiles>),
                 fire_projectiles.run_if(resource_exists::<FireProjectiles>),
-            )
-        )
-    ;
+            ),
+        );
 
     app.run()
 }
 
 fn handle_load_failed(reader: MessageReader<AssetLoadFailedEvent<Scene>>, mut commands: Commands) {
     if reader.is_empty() {
-        return
+        return;
     }
     commands.set_state(ProgramState::InGame);
 }
 
-fn setup(
-    mut commands: Commands,
-    world_q: Query<Entity, With<WorldMarker>>,
-) {
+fn setup(mut commands: Commands, world_q: Query<Entity, With<WorldMarker>>) {
     for world in world_q.iter() {
         commands.entity(world).despawn();
     }
@@ -203,23 +189,23 @@ fn make_world(
     model: Res<CollisionSceneSelection>,
     assets: Res<AssetServer>,
 ) {
-    let scene_path = model.get_asset_path().to_owned() ;
-    commands.spawn((
-        DespawnOnExit(ProgramState::InGame),
-        WorldMarker,
-        Visibility::Inherited,
-        Transform::IDENTITY,
-        AmbientLight{
-            brightness: 2000.0,
-            ..default()
-        }
-    ))
-    .with_children(|commands| {
-        commands
-            .spawn(SceneRoot(assets.load::<Scene>(scene_path)))
-            .observe(set_up_scene);
-    })
-    ;
+    let scene_path = model.get_asset_path().to_owned();
+    commands
+        .spawn((
+            DespawnOnExit(ProgramState::InGame),
+            WorldMarker,
+            Visibility::Inherited,
+            Transform::IDENTITY,
+            AmbientLight {
+                brightness: 2000.0,
+                ..default()
+            },
+        ))
+        .with_children(|commands| {
+            commands
+                .spawn(SceneRoot(assets.load::<Scene>(scene_path)))
+                .observe(set_up_scene);
+        });
 }
 
 /// glTF scene is instantiated: spawn projectiles.
@@ -249,6 +235,7 @@ fn set_up_scene(
     ] {
         commands.spawn((
             ChildOf(*world_q),
+            Name::new("Projectile"),
             Mesh3d(mesh.clone()),
             MeshMaterial3d(mat.clone()),
             Collider::cuboid(size.x, size.y, size.z),
@@ -256,20 +243,14 @@ fn set_up_scene(
             Mass(1000.0),
             Transform::from_translation(pos),
             Friction::ZERO,
-
-            Projectile{
-                start: pos,
-                vel,
-            },
+            Projectile { start: pos, vel },
         ));
     }
 
     commands.set_state(ProgramState::InGame);
 }
 
-fn make_ui(mut commands: Commands<'_, '_>,
-    model: Res<CollisionSceneSelection>,
-) {
+fn make_ui(mut commands: Commands<'_, '_>, model: Res<CollisionSceneSelection>) {
     let scene_path = dbg!(model.get_asset_path().to_owned());
     commands.spawn((
         UiMarker,
@@ -284,18 +265,22 @@ fn make_ui(mut commands: Commands<'_, '_>,
             left: px(12),
             ..default()
         },
-        Text::new(
-            format!(r#"
+        Text::new(format!(
+            r#"
 Scene: {scene_path}
 Space/Right/Left: toggle scenes
 Enter: fire projectiles (hold time => velocity)
 '['/']': rotate geometry
 G: toggle physics gizmos
+F: flip normals on collider mesh faces
+Z: recreate collider (default flags)
+Q: recreate collider (all bits except FIX_INTERNAL_EDGES)
+Backspace: recreate collider (FIX_INTERNAL_EDGES)
             "#,
-        ), ),
+        )),
         TextFont {
             font_size: 12.0,
-            .. default()
+            ..default()
         },
         TextColor(Color::WHITE.with_alpha(0.5)),
     ));
@@ -306,21 +291,20 @@ fn remove_world(
     world_q: Query<Entity, With<WorldMarker>>,
     camera_q: Query<Entity, With<Camera>>,
 ) {
-    world_q.iter().for_each(|ent| commands.entity(ent).try_despawn());
-    camera_q.iter().for_each(|ent| commands.entity(ent).try_despawn());
+    world_q
+        .iter()
+        .for_each(|ent| commands.entity(ent).try_despawn());
+    camera_q
+        .iter()
+        .for_each(|ent| commands.entity(ent).try_despawn());
 }
 
-fn remove_ui(
-    mut commands: Commands,
-    ui_q: Query<Entity, With<UiMarker>>,
-) {
-    ui_q.iter().for_each(|ent| commands.entity(ent).try_despawn());
+fn remove_ui(mut commands: Commands, ui_q: Query<Entity, With<UiMarker>>) {
+    ui_q.iter()
+        .for_each(|ent| commands.entity(ent).try_despawn());
 }
 
-
-fn restart(
-    mut commands: Commands,
-) {
+fn restart(mut commands: Commands) {
     commands.set_state(ProgramState::Setup);
 }
 
@@ -352,15 +336,55 @@ fn handle_keys(
 
     // Turn the world and collider on the Y axis.
     if keyboard_input.just_pressed(KeyCode::BracketLeft) {
-        content_q.iter_mut().for_each(|mut xfrm| xfrm.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * xfrm.rotation);
+        log::info!("spinning world & collider (no expected change)");
+        content_q.iter_mut().for_each(|mut xfrm| {
+            xfrm.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * xfrm.rotation
+        });
     }
     if keyboard_input.just_pressed(KeyCode::BracketRight) {
-        content_q.iter_mut().for_each(|mut xfrm| xfrm.rotation = Quat::from_rotation_y(- std::f32::consts::FRAC_PI_2) * xfrm.rotation);
+        log::info!("spinning world & collider (no expected change)");
+        content_q.iter_mut().for_each(|mut xfrm| {
+            xfrm.rotation = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2) * xfrm.rotation
+        });
     }
 
     // Toggle physics gizmos.
     if keyboard_input.just_pressed(KeyCode::KeyG) {
+        log::info!("Toggling physics gizmos");
         gizmos.config_mut::<PhysicsGizmos>().0.enabled ^= true;
+    }
+
+    // Recreate mesh with recommended flags.
+    if keyboard_input.just_released(KeyCode::Backspace) {
+        log::info!("Recreating collider mesh with FIX_INTERNAL_EDGES");
+        commands.run_system_cached((|| {
+            (TrimeshFlags::FIX_INTERNAL_EDGES, false)
+        }).pipe(recreate_collider_trimesh_faces_with_flags));
+    }
+    // Flip normals.
+    if keyboard_input.just_released(KeyCode::KeyF) {
+        log::info!("Recreating collider from flipped face order and using FIX_INTERNAL_EDGES");
+        commands.run_system_cached((|| {
+            (TrimeshFlags::FIX_INTERNAL_EDGES, true)
+        }).pipe(recreate_collider_trimesh_faces_with_flags));
+    }
+    // Recreate with all other bits
+    if keyboard_input.just_released(KeyCode::KeyQ) {
+        log::info!("Recreating collider using all bits but not FIX_INTERNAL_EDGES");
+        commands.run_system_cached((|| {
+            (TrimeshFlags::HALF_EDGE_TOPOLOGY | TrimeshFlags::CONNECTED_COMPONENTS
+            | TrimeshFlags::DELETE_BAD_TOPOLOGY_TRIANGLES
+            | TrimeshFlags::ORIENTED | TrimeshFlags::MERGE_DUPLICATE_VERTICES
+            | TrimeshFlags::DELETE_DEGENERATE_TRIANGLES | TrimeshFlags::DELETE_DUPLICATE_TRIANGLES
+            , false)
+        }).pipe(recreate_collider_trimesh_faces_with_flags));
+    }
+    // Recreate mesh with zero flags.
+    if keyboard_input.just_released(KeyCode::KeyZ) {
+        log::info!("Recreating colliders from their meshes (TrimeshFlags::empty())");
+        commands.run_system_cached((|| {
+            (TrimeshFlags::default(), false)
+        }).pipe(recreate_collider_trimesh_faces_with_flags));
     }
 
     /// These keys define the bidirectional navigation, from "move back" at position 0
@@ -370,8 +394,7 @@ fn handle_keys(
     if keyboard_input.any_just_pressed(NAV_KEYS) {
         let timer = Timer::from_seconds(1.0 / 30.0, TimerMode::Once);
         *switch_time = timer;
-    }
-    else if keyboard_input.any_pressed(NAV_KEYS) {
+    } else if keyboard_input.any_pressed(NAV_KEYS) {
         if switch_time.tick(time.delta()).just_finished() {
             let is_prev = keyboard_input.pressed(NAV_KEYS[0]);
             *selection = if is_prev {
@@ -379,7 +402,7 @@ fn handle_keys(
             } else {
                 selection.next()
             };
-            log::info!("Switching scene to {selection:?}...");
+            log::info!("Switching scene to {:?}...", *selection);
             commands.set_state(ProgramState::Teardown);
         }
     } else if keyboard_input.any_just_released(NAV_KEYS) {
@@ -388,7 +411,7 @@ fn handle_keys(
 }
 
 fn reset_projectiles(
-    mut projectiles_q: Query<(&Projectile, &mut Transform, Forces), Without<ContentMarker>>,
+    mut projectiles_q: Query<(&Projectile, &mut Transform, Forces)>,
     mut commands: Commands,
 ) {
     for (bumper, mut xfrm, mut forces) in projectiles_q.iter_mut() {
@@ -400,7 +423,6 @@ fn reset_projectiles(
     commands.remove_resource::<ResetProjectiles>();
 }
 
-
 fn queue_fire_projectiles(commands: Commands) {
     submit_fire_projectiles(commands, Duration::from_secs_f32(0.5));
 }
@@ -411,7 +433,7 @@ fn submit_fire_projectiles(mut commands: Commands, duration: Duration) {
 }
 
 fn fire_projectiles(
-    mut projectiles_q: Query<(&Projectile, Forces), Without<ContentMarker>>,
+    mut projectiles_q: Query<(&Projectile, Forces)>,
     mut commands: Commands,
     fire_projectiles: Res<FireProjectiles>,
 ) {
@@ -421,4 +443,17 @@ fn fire_projectiles(
         *forces.linear_velocity_mut() = bumper.vel * power;
     }
     commands.remove_resource::<FireProjectiles>();
+}
+
+fn recreate_collider_trimesh_faces_with_flags(In((flags, flip)): In<(TrimeshFlags, bool)>, mut collider_q: Query<(&Name, &mut Collider)>, mut _commands: Commands) {
+    for (name, mut collider) in collider_q.iter_mut() {
+        if !matches!(collider.shape().as_typed_shape(), TypedShape::TriMesh(_)) { continue };
+        log::info!("... adjusting {name}");
+
+        let mut trimesh = collider.trimesh_builder().build().expect("no idempotence?");
+        if flip {
+            trimesh.indices.reverse();
+        }
+        *collider = Collider::trimesh_with_config(trimesh.vertices, trimesh.indices, flags);
+    }
 }
