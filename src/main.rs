@@ -1,6 +1,5 @@
 use std::ops::Index;
 use std::time::Duration;
-use std::assert_matches;
 
 use avian3d::math::Vector;
 use avian3d::parry::shape::TypedShape;
@@ -121,6 +120,9 @@ struct Projectile {
     vel: Vector,
 }
 
+#[derive(Resource, Default)]
+struct IncludeAllColliders(bool);
+
 fn main() -> AppExit {
     let mut app = App::new();
     app.add_plugins((
@@ -149,6 +151,7 @@ fn main() -> AppExit {
 
     app.insert_state(ProgramState::default())
         .init_resource::<CollisionSceneSelection>()
+        .init_resource::<IncludeAllColliders>()
         .add_systems(Startup, setup)
         .add_systems(OnEnter(ProgramState::Setup), (make_world, make_ui))
         .add_systems(Update, handle_load_failed)
@@ -314,6 +317,7 @@ fn handle_keys(
     mut gizmos: ResMut<GizmoConfigStore>,
     mut selection: ResMut<CollisionSceneSelection>,
     mut commands: Commands,
+    mut include_all: ResMut<IncludeAllColliders>,
     time: Res<Time>,
     mut fire_time: Local<Timer>,
     mut switch_time: Local<Timer>,
@@ -353,6 +357,13 @@ fn handle_keys(
         log::info!("Toggling physics gizmos");
         gizmos.config_mut::<PhysicsGizmos>().0.enabled ^= true;
     }
+
+    // Toggle adjusting all colliders.
+    if keyboard_input.just_pressed(KeyCode::KeyA) {
+        include_all.0 = !include_all.0;
+        log::info!("{}", if include_all.0 { "Only modifying trimesh colliders" } else { "Regenerating all colliders" });
+    }
+
 
     // Recreate mesh with recommended flags.
     if keyboard_input.just_released(KeyCode::Backspace) {
@@ -445,9 +456,9 @@ fn fire_projectiles(
     commands.remove_resource::<FireProjectiles>();
 }
 
-fn recreate_collider_trimesh_faces_with_flags(In((flags, flip)): In<(TrimeshFlags, bool)>, mut collider_q: Query<(&Name, &mut Collider)>, mut _commands: Commands) {
+fn recreate_collider_trimesh_faces_with_flags(In((flags, flip)): In<(TrimeshFlags, bool)>, include_all: Res<IncludeAllColliders>, mut collider_q: Query<(&Name, &mut Collider)>, mut _commands: Commands) {
     for (name, mut collider) in collider_q.iter_mut() {
-        if !matches!(collider.shape().as_typed_shape(), TypedShape::TriMesh(_)) { continue };
+        if include_all.0 && !matches!(collider.shape().as_typed_shape(), TypedShape::TriMesh(_)) { continue };
         log::info!("... adjusting {name}");
 
         let mut trimesh = collider.trimesh_builder().build().expect("no idempotence?");
