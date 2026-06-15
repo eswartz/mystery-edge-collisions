@@ -7,6 +7,8 @@ Maybe the number one question in the Avian channel of the Bevy Discord channel i
 
 That *usually* works but not always!
 
+This contains a test project which cycles through various incarnations of taking a reasonable Blender scene and trying to get reliable collision results.
+
 ## Workflow
 
 The basic workflow for me is:
@@ -16,14 +18,29 @@ The basic workflow for me is:
 3. Export these as glTF
 4. Import them into a Bevy game at runtime
 
-This contains a test project which cycles through various incarnations of taking a reasonable Blender scene with a shallow flat plane with a square hole in the middle.
+## Blender view
+
+The original layout:
+
+![original](media/working-base.webp)
+
 Due to earlier collision woes I ended up with a high amount of rendered geometry, and later tried to reduce the physics overhead with a simplified custom mesh collider.
+
+After making a nested mesh for the collision geometry:
+
+![broken](media/broken.webp)
 
 Interestingly, ghost collisions only occur in some cases. And frustratingly, only in those with the reduced collision geometry. Grr!
 
 I checked and double-checked and triple-checked for classic problems (degenerate geometry, flipped normals, overlapping verts/edges) but none of these are present AFAICT.
 
-## Overview
+The only thing that seemed to work here was splitting each of the four faces of the collider into independent planes:
+
+![working again](media/working-again.webp)
+
+But this, of course, increases the number of entities and colliders and feels wrong. And it's much harder to automate!
+
+## Test program
 
 This program acts as a slideshow with various Blender scene evolutions with ghost collisions
 and a playground for tweaking colliders to test for issues.
@@ -34,7 +51,7 @@ On scene load, five projectiles (`Collider::Cuboid`) will be launched from a sho
 where they should all smoothly slide off. (There's one in the middle that intends to hit the hole or its edges.)
 
 <video width="320" height="240" controls>
-  <source src="playthrough.mp4" type="video/mp4">
+  <source src="media/playthrough.mp4" type="video/mp4">
 </video>
 
 ## Usage
