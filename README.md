@@ -23,13 +23,24 @@ Interestingly, ghost collisions only occur in some cases. And frustratingly, onl
 
 I checked and double-checked and triple-checked for classic problems (degenerate geometry, flipped normals, overlapping verts/edges) but none of these are present AFAICT.
 
-## Usage
+## Overview
 
-This program acts as a slideshow (with various Blender scene evolutions, use `right arrow` to step through)
-and playground for testing the issues. The `Friction` for all involved entities is `0.0` to ensure that *only* ghost collisions (or real collisions with the hole) should occur.
+This program acts as a slideshow with various Blender scene evolutions with ghost collisions
+and a playground for tweaking colliders to test for issues.
+
+The `Friction` for all involved entities is `0.0` to ensure that *only* ghost collisions (or real collisions with the hole) should occur.
 
 On scene load, five projectiles (`Collider::Cuboid`) will be launched from a short Y distance across the plane
 where they should all smoothly slide off. (There's one in the middle that intends to hit the hole or its edges.)
+
+<video width="320" height="240" controls>
+  <source src="playthrough.mp4" type="video/mp4">
+</video>
+
+## Usage
+
+* `right arrow` selects the next scene where I tried a new trick. The first is "Working mesh collider version" and the last is "Working version".
+* `left arrow` goes back.
 
 * `0` toggles Avian gizmo rendering. I have enabled normal collisions as red lines.
 * `Enter` (hold down for more speed) will re-launch projectiles.
