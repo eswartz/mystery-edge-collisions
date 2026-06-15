@@ -45,6 +45,8 @@ But this, of course, increases the number of entities and colliders and feels wr
 This program acts as a slideshow with various Blender scene evolutions with ghost collisions
 and a playground for tweaking colliders to test for issues.
 
+Build with `cargo run` or `cargo run -Fbie` to add `bevy-inspector-egui` support.
+
 The `Friction` for all involved entities is `0.0` to ensure that *only* ghost collisions (or real collisions with the hole) should occur.
 
 On scene load, five projectiles (`Collider::Cuboid`) will be launched from a short Y distance across the plane

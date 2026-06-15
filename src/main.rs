@@ -13,6 +13,11 @@ use bevy::scene::SceneInstanceReady;
 use bevy::{color::palettes::css::*, prelude::*};
 use bevy_skein::SkeinPlugin;
 
+#[cfg(feature = "bie")]
+use bevy_inspector_egui::{DefaultInspectorConfigPlugin, bevy_inspector};
+#[cfg(feature = "bie")]
+use bevy_egui::{EguiContext, EguiPrimaryContextPass, PrimaryEguiContext, EguiPlugin, input::egui_wants_any_input};
+
 #[derive(States, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[reflect(State, Default)]
 #[type_path = "game"]
@@ -224,6 +229,9 @@ fn main() -> AppExit {
         .add_systems(
             Update,
             (
+                #[cfg(feature = "bie")]
+                handle_keys.run_if(in_state(ProgramState::InGame)).run_if(not(egui_wants_any_input)),
+                #[cfg(not(feature = "bie"))]
                 handle_keys.run_if(in_state(ProgramState::InGame)),
                 reset_projectiles.run_if(resource_exists::<ResetProjectiles>),
                 fire_projectiles.run_if(resource_exists::<FireProjectiles>),
@@ -235,8 +243,53 @@ fn main() -> AppExit {
         )
     ;
 
+    #[cfg(feature = "bie")]
+    {
+        app.add_plugins(EguiPlugin::default());
+        app.add_plugins(MyWorldInspectorPlugin);
+    }
+
     app.run()
 }
+
+#[cfg(feature = "bie")]
+struct MyWorldInspectorPlugin;
+
+#[cfg(feature = "bie")]
+impl Plugin for MyWorldInspectorPlugin {
+    fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<DefaultInspectorConfigPlugin>() {
+            app.add_plugins(DefaultInspectorConfigPlugin);
+        }
+
+        let system = world_inspector_ui.into_configs();
+        app.add_systems(EguiPrimaryContextPass, system);
+    }
+}
+
+#[cfg(feature = "bie")]
+fn world_inspector_ui(world: &mut World) {
+    let egui_context = world
+        .query_filtered::<&mut EguiContext, With<PrimaryEguiContext>>()
+        .single(world);
+
+    let Ok(egui_context) = egui_context else {
+        return;
+    };
+    let mut egui_context = egui_context.clone();
+
+    egui::Window::new("World Inspector")
+        .default_size([200.0, 400.0])
+        .default_pos([32.0, 900.0])
+        .default_open(false)
+        .show(egui_context.get_mut(), |ui| {
+            egui::ScrollArea::both().show(ui, |ui| {
+                bevy_inspector::ui_for_world(world, ui);
+                ui.allocate_space(ui.available_size());
+            });
+        });
+}
+
 
 fn handle_load_failed(reader: MessageReader<AssetLoadFailedEvent<Scene>>, mut commands: Commands) {
     if reader.is_empty() {
