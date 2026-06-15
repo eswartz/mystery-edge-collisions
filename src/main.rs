@@ -1,3 +1,4 @@
+use std::hash::Hash;
 use std::ops::Index;
 use std::time::Duration;
 
@@ -5,7 +6,9 @@ use avian3d::math::Vector;
 use avian3d::parry::shape::TypedShape;
 use avian3d::prelude::*;
 use bevy::asset::AssetLoadFailedEvent;
+use bevy::color::palettes::css;
 use bevy::log::LogPlugin;
+use bevy::platform::collections::HashSet;
 use bevy::scene::SceneInstanceReady;
 use bevy::{color::palettes::css::*, prelude::*};
 use bevy_skein::SkeinPlugin;
@@ -140,14 +143,27 @@ impl IncludeColliders {
 
 #[derive(Clone, Reflect, GizmoConfigGroup)]
 #[reflect(Clone, Default)]
-struct NormalRenderConfigGroup {
-    pub normal_color: Option<Color>,
+struct OurColliderGizmos {
+    pub draw_face_normal: bool,
+    pub draw_edge_normal: bool,
+    pub draw_vert_normal: bool,
+    pub face_normal_color: Option<Color>,
+    pub edge_normal_color: Option<Color>,
+    pub vert_normal_color: Option<Color>,
     pub scale: f32,
 }
 
-impl Default for NormalRenderConfigGroup {
+impl Default for OurColliderGizmos {
     fn default() -> Self {
-        Self { normal_color: Some(TEAL.with_alpha(0.25).into()), scale: 1.0 }
+        Self {
+            draw_face_normal: true,
+            draw_edge_normal: true,
+            draw_vert_normal: true,
+            face_normal_color: Some(css::BISQUE.with_alpha(0.25).into()),
+            edge_normal_color: Some(css::CADET_BLUE.with_alpha(0.25).into()),
+            vert_normal_color: Some(css::LAVENDER.with_alpha(0.5).into()),
+            scale: 1.0,
+        }
     }
 }
 
@@ -174,20 +190,30 @@ fn main() -> AppExit {
         },
         GizmoConfig {
             enabled: true,
-            depth_bias: -0.1,
+            depth_bias: -0.1,   // ensure edges are drawn over meshes using them
             ..default()
         },
-    );
-
-    app.init_gizmo_group::<NormalRenderConfigGroup>();
+    )
+    .insert_gizmo_config(
+        OurColliderGizmos {
+            ..default()
+        },
+        GizmoConfig {
+            enabled: true,
+            depth_bias: -0.5,   // ensure edges are drawn over meshes using them
+            ..default()
+        },
+    )
+    ;
 
     app.insert_state(ProgramState::default())
         .init_resource::<CollisionSceneSelection>()
         .init_resource::<IncludeColliders>()
         .add_systems(Startup, setup)
-        .add_systems(OnEnter(ProgramState::Setup), (make_world, make_ui))
+        .add_systems(OnEnter(ProgramState::Setup), (spawn_scene, make_ui))
+        .add_systems(Update, set_in_game_soon.run_if(in_state(ProgramState::Setup)))
         .add_systems(Update, handle_load_failed)
-        .add_systems(OnEnter(ProgramState::InGame), queue_fire_projectiles)
+        .add_systems(OnEnter(ProgramState::InGame), (queue_fire_projectiles, report_collider_mesh_info))
         .add_systems(
             OnEnter(ProgramState::Teardown),
             (remove_world, remove_ui, restart).chain(),
@@ -202,10 +228,7 @@ fn main() -> AppExit {
         )
         .add_systems(
             PostUpdate,
-            (
-                draw_collider_mesh_normals
-                .run_if(|store: Res<GizmoConfigStore>| store.config::<NormalRenderConfigGroup>().0.enabled),
-            ),
+            draw_collider_mesh_gizmos,
         )
     ;
 
@@ -227,7 +250,7 @@ fn setup(mut commands: Commands, world_q: Query<Entity, With<WorldMarker>>) {
     commands.set_state(ProgramState::Setup);
 }
 
-fn make_world(
+fn spawn_scene(
     mut commands: Commands,
     model: Res<CollisionSceneSelection>,
     assets: Res<AssetServer>,
@@ -247,12 +270,13 @@ fn make_world(
         .with_children(|commands| {
             commands
                 .spawn(SceneRoot(assets.load::<Scene>(scene_path)))
-                .observe(set_up_scene);
+                .observe(handle_setup_scene)
+            ;
         });
 }
 
-/// glTF scene is instantiated: spawn projectiles.
-fn set_up_scene(
+/// glTF scene is instantiated. Spawn our content.
+fn handle_setup_scene(
     _event: On<SceneInstanceReady>,
     world_q: Single<Entity, With<WorldMarker>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -266,9 +290,12 @@ fn set_up_scene(
 
     const X1: f32 = 3.0;
     const Z1: f32 = 10.0;
-    const SX: f32 = 5.0;
-    const SZ: f32 = 7.5;
+    const SX: f32 = 3.0;
+    const SZ: f32 = 9.5;
 
+    // Projectiles point in selected positions and angles most likely
+    // to demonstrate the issue in a visibly obvious way, given
+    // the symmetry of movement and the asymmetry of response.
     for (pos, vel) in [
         (Vec3::new(-X1, 1.0, -Z1), Vector::new(-SX, -1.0, SZ)),
         (Vec3::new(X1, 1.0, -Z1), Vector::new(SX, -1.0, SZ)),
@@ -290,7 +317,24 @@ fn set_up_scene(
         ));
     }
 
-    commands.set_state(ProgramState::InGame);
+}
+
+fn set_in_game_soon(mut commands: Commands,
+    time: Res<Time>,
+    // program_state: Res<State<ProgramState>>,
+    mut timer: Local<Timer>,
+) {
+    // if **program_state != ProgramState::InGame {
+    //     return
+    // }
+
+    if timer.duration().is_zero() {
+        *timer = Timer::new(Duration::from_secs(1), TimerMode::Once);
+    }
+    if timer.tick(time.delta()).is_finished() {
+        commands.set_state(ProgramState::InGame);
+    }
+
 }
 
 fn make_ui(mut commands: Commands<'_, '_>, model: Res<CollisionSceneSelection>) {
@@ -312,12 +356,14 @@ fn make_ui(mut commands: Commands<'_, '_>, model: Res<CollisionSceneSelection>) 
         Text::new(format!(
             r#"
 Scene: {scene_path}
-Space/Right/Left: toggle scenes
+Right/Left: toggle scenes
 Enter: fire projectiles (hold time => velocity)
 '['/']': rotate geometry
-G: toggle physics gizmos
-F: flip normals on collider mesh faces
-Z: recreate collider (default flags)
+
+0: toggle physics gizmos
+1,2,3: toggle collider vert, edge, face normals
+F: flip normals on collider mesh faces (FIX_INTERNAL_EDGES)
+Z: recreate collider (default flags -- 0!)
 Q: recreate collider (all bits except FIX_INTERNAL_EDGES)
 Backspace: recreate collider (FIX_INTERNAL_EDGES)
             "#,
@@ -377,28 +423,45 @@ fn handle_keys(
 
     // Turn the world and collider on the Y axis.
     if keyboard_input.just_pressed(KeyCode::BracketLeft) {
-        log::info!("spinning world & collider (no expected change)");
+        log::info!("Spinning world & collider (no expected change)");
         content_q.iter_mut().for_each(|mut xfrm| {
             xfrm.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * xfrm.rotation
         });
     }
     if keyboard_input.just_pressed(KeyCode::BracketRight) {
-        log::info!("spinning world & collider (no expected change)");
+        log::info!("Spinning world & collider (no expected change)");
         content_q.iter_mut().for_each(|mut xfrm| {
             xfrm.rotation = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2) * xfrm.rotation
         });
     }
 
-    // Toggle physics gizmos.
-    if keyboard_input.just_pressed(KeyCode::KeyG) {
+    if keyboard_input.just_pressed(KeyCode::Digit0) {
         log::info!("Toggling physics gizmos");
         gizmos.config_mut::<PhysicsGizmos>().0.enabled ^= true;
     }
 
-    // Toggle adjusting all colliders.
+    if keyboard_input.just_pressed(KeyCode::Digit1) {
+        log::info!("Toggling collider vertex gizmos");
+        gizmos.config_mut::<OurColliderGizmos>().1.draw_vert_normal ^= true;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit2) {
+        log::info!("Toggling collider edge gizmos");
+        gizmos.config_mut::<OurColliderGizmos>().1.draw_edge_normal ^= true;
+    }
+    if keyboard_input.just_pressed(KeyCode::Digit3) {
+        log::info!("Toggling collider face gizmos");
+        gizmos.config_mut::<OurColliderGizmos>().1.draw_face_normal ^= true;
+    }
+
+    // Toggle kind of colliders affected.
     if keyboard_input.just_pressed(KeyCode::KeyA) {
         *include_colliders = include_colliders.next();
         log::info!("Colliders affected: {:?}", *include_colliders);
+    }
+
+    // Report collider info.
+    if keyboard_input.just_released(KeyCode::KeyI) {
+        commands.run_system_cached(report_collider_mesh_info);
     }
 
     // Recreate mesh with recommended flags.
@@ -437,8 +500,8 @@ fn handle_keys(
     }
 
     /// These keys define the bidirectional navigation, from "move back" at position 0
-    /// and all others considered "move forward".
-    const NAV_KEYS: [KeyCode; 3] = [KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::Space];
+    /// and any others "move forward".
+    const NAV_KEYS: [KeyCode; 2] = [KeyCode::ArrowLeft, KeyCode::ArrowRight];
 
     if keyboard_input.any_just_pressed(NAV_KEYS) {
         let timer = Timer::from_seconds(1.0 / 30.0, TimerMode::Once);
@@ -494,7 +557,7 @@ fn fire_projectiles(
     commands.remove_resource::<FireProjectiles>();
 }
 
-fn recreate_collider_trimesh_faces_with_flags(In((flags, flip)): In<(TrimeshFlags, bool)>, include_colliders: Res<IncludeColliders>, mut collider_q: Query<(&Name, &mut Collider)>, mut _commands: Commands) {
+fn recreate_collider_trimesh_faces_with_flags(In((flags, flip)): In<(TrimeshFlags, bool)>, include_colliders: Res<IncludeColliders>, mut collider_q: Query<(&Name, &mut Collider)>, mut commands: Commands) {
     for (name, mut collider) in collider_q.iter_mut() {
         let is_mesh = matches!(collider.shape().as_typed_shape(), TypedShape::TriMesh(_));
         let include = match *include_colliders {
@@ -509,39 +572,115 @@ fn recreate_collider_trimesh_faces_with_flags(In((flags, flip)): In<(TrimeshFlag
         log::info!("... adjusting {name}");
         let mut trimesh = collider.trimesh_builder().build().expect("no idempotence?");
         if flip {
-            trimesh.indices.reverse();
+            for tri in &mut trimesh.indices {
+                tri.reverse();
+            }
         }
         *collider = Collider::trimesh_with_config(trimesh.vertices, trimesh.indices, flags);
 
-        let mesh = collider.shape().as_trimesh().expect("wa?");
-        log::info!(".. collider mesh has flags: 0x{:02X} topology:{} pseudo_normals:{}", mesh.flags(),
-            mesh.topology().is_some(),
-            mesh.pseudo_normals_if_oriented().is_some());
+        commands.run_system_cached(report_collider_mesh_info);
+    }
+}
+
+fn report_collider_mesh_info(collider_q: Query<(Entity, Option<&Name>, &Collider)>) {
+    if collider_q.is_empty() {
+        log::warn!("No colliders found...");
+        return
+    }
+
+    for (ent, name_opt, collider) in collider_q.iter() {
+        if let TypedShape::TriMesh(mesh) = collider.shape().as_typed_shape() {
+            log::info!("{ent}: {:>20}: pseudo_normals_if_oriented={}",
+                if let Some(name) = name_opt { name.to_string() } else { String::new() },
+                mesh.pseudo_normals_if_oriented().is_some(),
+            );
+
+            if log::max_level() >= log::LevelFilter::Debug {
+                if let Some(pn) = mesh.pseudo_normals_if_oriented() {
+                    #[derive(Debug, Clone)]
+                    struct NormalKey(Vec3);
+
+                    impl PartialEq for NormalKey {
+                        fn eq(&self, other: &Self) -> bool {
+                            self.0.distance(other.0) < 0.00001
+                        }
+                    }
+                    impl Eq for NormalKey {}
+                    impl Hash for NormalKey {
+                        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                            let val = (self.0.x + self.0.y + self.0.z) * 1e3;
+                            (val as u64).hash(state);
+                        }
+                    }
+
+                    let mut seen: HashSet<NormalKey> = default();
+                    for pn in &pn.edges_pseudo_normal {
+                        seen.insert(NormalKey(pn[0]));
+                        seen.insert(NormalKey(pn[1]));
+                        seen.insert(NormalKey(pn[2]));
+                    }
+                    for val in seen {
+                        log::debug!("  unique edge normal: {:.03?}", val.0);
+                    }
+                }
+            }
+        }
     }
 }
 
 
-fn draw_collider_mesh_normals(
+fn draw_collider_mesh_gizmos(
     query: Query<(
         &Collider,
         &GlobalTransform,
     )>,
-    mut gizmos: Gizmos<NormalRenderConfigGroup>,
+    mut gizmos: Gizmos<OurColliderGizmos>,
 ) {
     if !gizmos.config.enabled { return }
-
-    let scale = gizmos.config_ext.scale;
-    let Some(color) = gizmos.config_ext.normal_color.clone() else { return };
 
     for (collider, gxfrm) in &query {
         let Some(mesh) = collider.shape().as_trimesh() else { continue };
 
-        for tri in mesh.triangles() {
-            let center = tri.center();
-            let norm = tri.robust_normal();
-            gizmos.line(gxfrm.transform_point(center),
-                gxfrm.transform_point(center + norm * scale),
-                color);
+        if gizmos.config_ext.draw_face_normal
+        && let Some(face_normal_color) = &gizmos.config_ext.face_normal_color {
+            let scale = gizmos.config_ext.scale;
+            for tri in mesh.triangles() {
+                let center = tri.center();
+                let norm = tri.robust_normal();
+                gizmos.line(gxfrm.transform_point(center),
+                    gxfrm.transform_point(center + norm * scale),
+                    *face_normal_color);
+            }
+        }
+        if gizmos.config_ext.draw_vert_normal
+        && let Some(vert_normal_color) = gizmos.config_ext.vert_normal_color.clone()
+        && let Some(pn) = mesh.pseudo_normals() {
+            let scale = gizmos.config_ext.scale * 0.25;
+
+            for (index, norm) in pn.vertices_pseudo_normal.iter().enumerate() {
+                let Some(mid) = mesh.vertices().get(index) else { log::error!("wut {index}"); continue };
+                gizmos.line(gxfrm.transform_point(*mid), gxfrm.transform_point(mid + norm * scale), vert_normal_color);
+            }
+        }
+        if gizmos.config_ext.draw_edge_normal
+        && let Some(edge_normal_color) = gizmos.config_ext.edge_normal_color.clone()
+        && let Some(pn) = mesh.pseudo_normals() {
+            let scale = gizmos.config_ext.scale * 0.5;
+
+            for (index, tri_edge_normals) in pn.edges_pseudo_normal.iter().enumerate() {
+                if index >= mesh.num_triangles() { continue };
+
+                let tri = mesh.triangle(index as u32);
+                let mid = tri.a.midpoint(tri.b);
+                let norm = tri_edge_normals[0];
+                gizmos.line(gxfrm.transform_point(mid), gxfrm.transform_point(mid + norm * scale), edge_normal_color);
+                let mid = tri.b.midpoint(tri.c);
+                let norm = tri_edge_normals[1];
+                gizmos.line(gxfrm.transform_point(mid), gxfrm.transform_point(mid + norm * scale), edge_normal_color);
+                let mid = tri.c.midpoint(tri.a);
+                let norm = tri_edge_normals[2];
+                gizmos.line(gxfrm.transform_point(mid), gxfrm.transform_point(mid + norm * scale), edge_normal_color);
+            }
         }
     }
 }
