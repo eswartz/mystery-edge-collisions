@@ -158,7 +158,7 @@ struct OurColliderGizmos {
 impl Default for OurColliderGizmos {
     fn default() -> Self {
         Self {
-            draw_face_normal: true,
+            draw_face_normal: false,
             draw_edge_normal: false,
             draw_vert_normal: false,
             face_normal_color: Some(css::BISQUE.with_alpha(0.25).into()),
@@ -215,11 +215,12 @@ fn main() -> AppExit {
         .add_systems(OnEnter(ProgramState::Setup), (spawn_scene, make_ui))
         .add_systems(Update, set_in_game_soon.run_if(in_state(ProgramState::Setup)))
         .add_systems(Update, handle_load_failed)
-        .add_systems(OnEnter(ProgramState::InGame), (queue_fire_projectiles, report_collider_mesh_info))
         .add_systems(
             OnEnter(ProgramState::Teardown),
             (remove_world, remove_ui, restart).chain(),
         )
+        .add_systems(OnEnter(ProgramState::InGame), queue_kick_off)
+        .add_systems(Update, kick_off_after_delay.run_if(in_state(ProgramState::InGame)))
         .add_systems(
             Update,
             (
@@ -318,18 +319,12 @@ fn handle_setup_scene(
             Projectile { start: pos, vel },
         ));
     }
-
 }
 
 fn set_in_game_soon(mut commands: Commands,
     time: Res<Time>,
-    // program_state: Res<State<ProgramState>>,
     mut timer: Local<Timer>,
 ) {
-    // if **program_state != ProgramState::InGame {
-    //     return
-    // }
-
     if timer.duration().is_zero() {
         *timer = Timer::new(Duration::from_secs(1), TimerMode::Once);
     }
@@ -362,12 +357,13 @@ Right/Left: toggle scenes
 Enter: fire projectiles (hold time => velocity)
 '['/']': rotate geometry
 
+(FIE = "TrimeshFlags::FIX_INTERNAL_EDGES")
 0: toggle physics gizmos
 1,2,3: toggle collider vert, edge, face normals
-F: flip normals on collider mesh faces (FIX_INTERNAL_EDGES)
+F: flip normals on collider mesh faces (FIE)
 Z: recreate collider (default flags -- 0!)
-Q: recreate collider (all bits except FIX_INTERNAL_EDGES)
-Backspace: recreate collider (FIX_INTERNAL_EDGES)
+Q: recreate collider (all bits except bit set for FIE)
+Backspace: recreate collider (FIE)
             "#,
         )),
         TextFont {
@@ -394,6 +390,24 @@ fn remove_ui(mut commands: Commands, ui_q: Query<Entity, With<UiMarker>>) {
 
 fn restart(mut commands: Commands) {
     commands.set_state(ProgramState::Setup);
+}
+
+#[derive(Resource)]
+struct KickOffTimer(Timer);
+
+fn queue_kick_off(mut commands: Commands) {
+    commands.insert_resource(KickOffTimer(Timer::new(Duration::from_secs_f32(0.5), TimerMode::Once)));
+}
+
+fn kick_off_after_delay(mut commands: Commands,
+    time: Res<Time>,
+    mut timer: If<ResMut<KickOffTimer>>,
+) {
+    if timer.0.0.tick(time.delta()).just_finished() {
+        queue_fire_projectiles(commands.reborrow());
+        commands.run_system_cached(report_collider_mesh_info);
+        commands.remove_resource::<KickOffTimer>();
+    }
 }
 
 fn handle_keys(
