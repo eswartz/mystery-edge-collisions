@@ -115,6 +115,7 @@ struct FireProjectiles(f32);
 // set from skein
 #[derive(Component, Default, Reflect)]
 #[reflect(Component, Default)]
+#[type_path = "game"]
 pub struct ContentMarker;
 
 #[derive(Component)]
@@ -143,6 +144,7 @@ impl IncludeColliders {
 
 #[derive(Clone, Reflect, GizmoConfigGroup)]
 #[reflect(Clone, Default)]
+#[type_path = "game"]
 struct OurColliderGizmos {
     pub draw_face_normal: bool,
     pub draw_edge_normal: bool,
@@ -157,8 +159,8 @@ impl Default for OurColliderGizmos {
     fn default() -> Self {
         Self {
             draw_face_normal: true,
-            draw_edge_normal: true,
-            draw_vert_normal: true,
+            draw_edge_normal: false,
+            draw_vert_normal: false,
             face_normal_color: Some(css::BISQUE.with_alpha(0.25).into()),
             edge_normal_color: Some(css::CADET_BLUE.with_alpha(0.25).into()),
             vert_normal_color: Some(css::LAVENDER.with_alpha(0.5).into()),
