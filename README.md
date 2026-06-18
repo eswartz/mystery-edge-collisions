@@ -52,6 +52,8 @@ The `Friction` for all involved entities is `0.0` to ensure that *only* ghost co
 On scene load, five projectiles (`Collider::Cuboid`) will be launched from a short Y distance across the plane
 where they should all smoothly slide off. (There's one in the middle that intends to hit the hole or its edges.)
 
+(This is an old video -- the current code doesn't include the "making it work" edits.)
+
 <video width="320" height="240" controls>
   <source src="media/playthrough.mp4" type="video/mp4">
 </video>
@@ -91,3 +93,9 @@ There are keys that add gizmos for aspects of the Parry `Trimesh` that I thought
 I can't seem to find anything that directly points to a problem, assuming these have any bearing on the situation at all.
 
 I think I've come far enough along at least to provide this as a useful test case to ensure that new collider algorithms work properly, I hope.
+
+## Rapier comparison
+
+The same model, with a similarly-constructed collider, does not exhibit the issues.
+
+`cd rapier` and `cargo run` to see the comparison.
