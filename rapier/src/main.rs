@@ -154,8 +154,8 @@ fn fire_projectiles(
                 combine_rule: CoefficientCombineRule::default(),
             },
             Velocity {
-                linear: Vect::new(vel.x, vel.y, vel.z),
-                angular: default(),
+                linvel: Vect::new(vel.x, vel.y, vel.z),
+                angvel: default(),
             }
         ));
     }
