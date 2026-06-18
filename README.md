@@ -99,3 +99,7 @@ I think I've come far enough along at least to provide this as a useful test cas
 The same model, with a similarly-constructed collider, does not exhibit the issues.
 
 `cd rapier` and `cargo run` to see the comparison.
+
+<video width="320" height="240" controls>
+  <source src="media/rapier.mp4" type="video/mp4">
+</video>
