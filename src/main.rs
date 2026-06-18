@@ -43,13 +43,7 @@ enum CollisionSceneSelection {
     #[default]
     Scene0,
     Scene0b,
-    Scene1,
-    Scene2,
-    Scene3,
-    Scene4,
-    Scene5,
     Scene6,
-    Scene7,
 }
 
 impl Index<usize> for CollisionSceneSelection {
@@ -60,17 +54,11 @@ impl Index<usize> for CollisionSceneSelection {
     }
 }
 impl CollisionSceneSelection {
-    pub(crate) const LEN: usize = 7;
+    pub(crate) const LEN: usize = 3;
     pub(crate) const PLAYLIST: [Self; Self::LEN] = [
         Self::Scene0,
         Self::Scene0b,
-        Self::Scene1,
-        Self::Scene2,
-        Self::Scene3,
-        Self::Scene4,
-        // Self::Scene5,
         Self::Scene6,
-        // Self::Scene7,
     ];
     pub(crate) fn position(&self) -> usize {
         // This is dumb
@@ -98,13 +86,7 @@ impl CollisionSceneSelection {
         match self {
             Self::Scene0 => "maps/level_0.glb#Scene0",
             Self::Scene0b => "maps/level_0_reduced.glb#Scene0",
-            Self::Scene1 => "maps/level_0_broken.glb#Scene0",
-            Self::Scene2 => "maps/level_0_edit_0.glb#Scene0",
-            Self::Scene3 => "maps/level_0_edit_1.glb#Scene0",
-            Self::Scene4 => "maps/level_0_edit_2.glb#Scene0",
-            Self::Scene5 => "maps/level_0_edit_3.glb#Scene0",
             Self::Scene6 => "maps/level_0_edit_fixed.glb#Scene0",
-            Self::Scene7 => "maps/level_0_edit_fixed_2.glb#Scene0",
         }
     }
 }
@@ -213,6 +195,13 @@ fn main() -> AppExit {
     )
     ;
 
+    #[cfg(feature = "bie")]
+    {
+        app.add_plugins(EguiPlugin::default());
+        app.add_plugins(MyWorldInspectorPlugin);
+    }
+
+
     app.insert_state(ProgramState::default())
         .init_resource::<CollisionSceneSelection>()
         .init_resource::<IncludeColliders>()
@@ -243,12 +232,6 @@ fn main() -> AppExit {
         )
     ;
 
-    #[cfg(feature = "bie")]
-    {
-        app.add_plugins(EguiPlugin::default());
-        app.add_plugins(MyWorldInspectorPlugin);
-    }
-
     app.run()
 }
 
@@ -270,8 +253,8 @@ impl Plugin for MyWorldInspectorPlugin {
 #[cfg(feature = "bie")]
 fn world_inspector_ui(world: &mut World) {
     let egui_context = world
-        .query_filtered::<&mut EguiContext, With<PrimaryEguiContext>>()
-        .single(world);
+    .query_filtered::<&mut EguiContext, With<PrimaryEguiContext>>()
+    .single(world);
 
     let Ok(egui_context) = egui_context else {
         return;
@@ -390,13 +373,14 @@ fn set_in_game_soon(mut commands: Commands,
 fn make_ui(mut commands: Commands<'_, '_>, model: Res<CollisionSceneSelection>) {
     let scene_path = dbg!(model.get_asset_path().to_owned());
     commands.spawn((
-        UiMarker,
         Camera2d::default(),
         Camera {
             // on top of 3d
             order: 1,
             ..default()
         },
+    )).with_child((
+        UiMarker,
         Node {
             position_type: PositionType::Absolute,
             top: px(12),
@@ -433,12 +417,17 @@ fn remove_world(
 ) {
     world_q
         .iter()
-        .for_each(|ent| commands.entity(ent).try_despawn());
+        .for_each(|ent| { commands.entity(ent).try_despawn(); });
 }
 
-fn remove_ui(mut commands: Commands, ui_q: Query<Entity, With<UiMarker>>) {
+fn remove_ui(mut commands: Commands, ui_q: Query<Entity, With<UiMarker>>,
+    mut cam_q: Query<&mut Camera, With<Camera2d>>,
+) {
     ui_q.iter()
-        .for_each(|ent| commands.entity(ent).try_despawn());
+        .for_each(|ent| { commands.entity(ent).try_despawn(); });
+    for mut cam in cam_q.iter_mut() {
+        cam.order += 1;
+    }
 }
 
 fn restart(mut commands: Commands) {
